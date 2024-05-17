@@ -6,6 +6,9 @@ $botLeft = [char]::ConvertFromUtf32(0x2514)
 $botRight = [char]::ConvertFromUtf32(0x2518)
 $horiz = [char]::ConvertFromUtf32(0x2500)
 $vert = [char]::ConvertFromUtf32(0x2502)
+
+$MenuStack = @()  # Initialize the menu stack
+
 function Show-SimpleMenu {
     param (
         [array]$MenuOptions,
@@ -14,9 +17,9 @@ function Show-SimpleMenu {
     $maxLength = ($MenuOptions | Measure-Object -Maximum -Property Length).Maximum # Get longest string length
     if ($maxLength -lt $Title.Length) { $maxLength = $Title.Length }
     $highlighted = 0
-    $MenuTop = [Console]::CursorTop
+
     Do {
-        [Console]::CursorTop = $MenuTop
+        #Clear-Host 
         Write-Host "$topLeft$($Title.PadRight($maxLength,$horiz))$topRight"
         for ($i = 0; $i -lt $MenuOptions.Length; $i++) {
             Write-Host "$vert" -NoNewLine
@@ -31,10 +34,24 @@ function Show-SimpleMenu {
         $keycode = [Console]::ReadKey($true)
         if ($keyCode.Key -eq [ConsoleKey]::UpArrow -and $highlighted -gt 0) { $highlighted-- }
         if ($keycode.Key -eq [ConsoleKey]::DownArrow -and $highlighted -lt $MenuOptions.Length - 1) { $highlighted++ }
-    } while ($keyCode.Key -ne [ConsoleKey]::Enter -and $keycode.Key -ne [ConsoleKey]::Escape)
+        if ($keyCode.Key -eq [ConsoleKey]::Escape) { 
+            if ($MenuStack.Count -gt 0) {
+                $lastMenu = $MenuStack[$MenuStack.Count - 1]
+                $MenuStack.RemoveAt($MenuStack.Count - 1)
+                Write-Host $lastMenu
+                Invoke-Expression $lastMenu
+            } else { Exit-PSSession }
+        }
+    } while ($keyCode.Key -ne [ConsoleKey]::Enter)
 
-    if ($keyCode.Key -eq [ConsoleKey]::Enter) { return $MenuOptions[$highlighted] }
+    if ($keyCode.Key -eq [ConsoleKey]::Enter) {
+        $MenuStack += $MenuOptions[$highlighted]  # Add current menu to stack
+        Write-Host $MenuStack
+        
+        return $MenuOptions[$highlighted]  # Return the current selection
+    }
 }
+
 
 function network {
     $ret = Show-SimpleMenu @('ip', 'temp')
@@ -42,7 +59,7 @@ function network {
 }
 
 function ip {
-    $ret = Show-SimpleMenu @('set-address', 'set-dns') -Title 'sugma'
+    $ret = Show-SimpleMenu @('set-address', 'set-dns')
     Invoke-Expression $ret
 }
 
@@ -53,14 +70,15 @@ function set-address {
     $adapter = Get-NetAdapter | Where-Object { $_.Name -eq $interface }
     $currIP = ($adapter | Get-NetIPAddress -AddressFamily IPv4).IPAddress
     $currMask = ($adapter | Get-NetIPAddress -AddressFamily IPv4).PrefixLength
+    $currGate = ($adapter | Get-NetIPConfiguration).IPv4DefaultGateway.NextHop
+
     Write-Host "Current IP is $currIP/$currMask"
 
-    $newMask = Read-Host -Prompt "Enter new subnet mask (24/16/8)"
-    $newMask = [int]$newMask  # Cast to int because PowerShell is strict with types
+    $newMask = Read-Host -Prompt "Enter new subnet mask (24, 16, 8)"
+    $newMask = [int]$newMask  # Cast to int because powershell reads as string
     if ($newMask -gt 32 -or $newMask -lt 0) {
         Write-Host "Invalid network mask (0-32)" -ForegroundColor Red
         set-address
-        return
     }
 
     $ipv4Regex = "^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
@@ -68,33 +86,28 @@ function set-address {
     if ($newIP -notmatch $ipv4Regex) {
         Write-Host "Invalid IPv4 address" -ForegroundColor Red
         set-address
-        return
     }
 
-    $oldGate = ($adapter | Get-NetIPConfiguration).IPv4DefaultGateway.NextHop
-    Write-Host "To use old gateway ($oldGate) press enter"
+    
+    Write-Host "To use old gateway ($currGate) press enter"
     $newGate = Read-Host -Prompt "Enter new IPv4 gateway"
     if ([string]::IsNullOrWhiteSpace($newGate)) {
-        $newGate = $oldGate
+        $newGate = $currGate
     } else {
         if ($newGate -notmatch $ipv4Regex) {
             Write-Host "Invalid IPv4 address" -ForegroundColor Red
             set-address
-            return
         }
     }
 
-    $oldDns = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4
-    Write-Host "To use old DNS ($oldDns) press enter"
+    $currDns = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4
+    Write-Host "To use old DNS ($currDns) press enter"
     $newDns = Read-Host -Prompt "Enter new DNS IP"
     if ([string]::IsNullOrWhiteSpace($newDns)) {
-        $newDns = $oldDns
-    } else {
-        if ($newDns -notmatch $ipv4Regex) {
-            Write-Host "Invalid IPv4 address" -ForegroundColor Red
-            set-address
-            return
-        }
+        $newDns = $currDns
+    } elseif ($newDns -notmatch $ipv4Regex) {
+        Write-Host "Invalid IPv4 address" -ForegroundColor Red
+        set-address
     }
     Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $newDns -Validate 
 
@@ -115,8 +128,13 @@ function set-address {
 }
 
 function search {
-    # Add the functionality for the search here
+    
 }
 
-$initial = Show-SimpleMenu @('network', 'domain', 'reg', 'search')
-Invoke-Expression $initial
+function initial {
+    $initial = Show-SimpleMenu @('network', 'domain', 'reg', 'search')
+    Invoke-Expression $initial
+    
+}
+
+initial
